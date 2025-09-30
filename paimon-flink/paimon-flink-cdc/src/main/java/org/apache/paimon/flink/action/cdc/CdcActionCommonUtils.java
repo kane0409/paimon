@@ -33,6 +33,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -157,6 +158,11 @@ public class CdcActionCommonUtils {
 
         checkDuplicateFields(tableName, allFieldNames);
 
+        // partition keys
+        specifiedPartitionKeys = listCaseConvert(specifiedPartitionKeys, caseSensitive);
+        setPartitionKeys(
+                tableName, builder, specifiedPartitionKeys, allFieldNames, strictlyCheckSpecified);
+
         // primary keys
         specifiedPrimaryKeys = listCaseConvert(specifiedPrimaryKeys, caseSensitive);
         List<String> sourceSchemaPrimaryKeys =
@@ -166,15 +172,11 @@ public class CdcActionCommonUtils {
                 builder,
                 specifiedPrimaryKeys,
                 sourceSchemaPrimaryKeys,
+                specifiedPartitionKeys,
                 allFieldNames,
                 strictlyCheckSpecified,
                 requirePrimaryKeys,
                 syncPKeysFromSourceSchema);
-
-        // partition keys
-        specifiedPartitionKeys = listCaseConvert(specifiedPartitionKeys, caseSensitive);
-        setPartitionKeys(
-                tableName, builder, specifiedPartitionKeys, allFieldNames, strictlyCheckSpecified);
 
         // comment
         builder.comment(sourceSchema.comment());
@@ -187,20 +189,36 @@ public class CdcActionCommonUtils {
             Schema.Builder builder,
             List<String> specifiedPrimaryKeys,
             List<String> sourceSchemaPrimaryKeys,
+            List<String> specifiedPartitionKeys,
             List<String> allFieldNames,
             boolean strictlyCheckSpecified,
             boolean requirePrimaryKeys,
             boolean syncPKeysFromSourceSchema) {
         if (!specifiedPrimaryKeys.isEmpty()) {
-            if (allFieldNames.containsAll(specifiedPrimaryKeys)) {
-                builder.primaryKey(specifiedPrimaryKeys);
+            List<String> finalPrimaryKeys = new ArrayList<>(specifiedPrimaryKeys);
+
+            if (syncPKeysFromSourceSchema && !specifiedPartitionKeys.isEmpty()) {
+                for (String partitionKey : specifiedPartitionKeys) {
+                    if (!finalPrimaryKeys.contains(partitionKey)) {
+                        finalPrimaryKeys.add(partitionKey);
+                    }
+                }
+            }
+
+            if (new HashSet<>(allFieldNames).containsAll(finalPrimaryKeys)) {
+                LOG.info(
+                        "Setting primary keys for table {}: {} (includes partition keys: {})",
+                        tableName,
+                        finalPrimaryKeys,
+                        specifiedPartitionKeys);
+                builder.primaryKey(finalPrimaryKeys);
                 return;
             }
 
             String message =
                     String.format(
                             "For sink table %s, not all specified primary keys '%s' exist in source tables or computed columns '%s'.",
-                            tableName, specifiedPrimaryKeys, allFieldNames);
+                            tableName, finalPrimaryKeys, allFieldNames);
             if (strictlyCheckSpecified) {
                 throw new IllegalArgumentException(message);
             } else {
@@ -211,7 +229,22 @@ public class CdcActionCommonUtils {
         }
 
         if (syncPKeysFromSourceSchema && !sourceSchemaPrimaryKeys.isEmpty()) {
-            builder.primaryKey(sourceSchemaPrimaryKeys);
+            List<String> finalPrimaryKeys = new ArrayList<>(sourceSchemaPrimaryKeys);
+
+            if (!specifiedPartitionKeys.isEmpty()) {
+                for (String partitionKey : specifiedPartitionKeys) {
+                    if (!finalPrimaryKeys.contains(partitionKey)) {
+                        finalPrimaryKeys.add(partitionKey);
+                    }
+                }
+            }
+
+            LOG.info(
+                    "Setting primary keys for table {}: {} (auto-appended partition keys: {})",
+                    tableName,
+                    finalPrimaryKeys,
+                    specifiedPartitionKeys);
+            builder.primaryKey(finalPrimaryKeys);
             return;
         }
 
@@ -231,7 +264,7 @@ public class CdcActionCommonUtils {
             List<String> allFieldNames,
             boolean strictlyCheckSpecified) {
         if (!specifiedPartitionKeys.isEmpty()) {
-            if (allFieldNames.containsAll(specifiedPartitionKeys)) {
+            if (new HashSet<>(allFieldNames).containsAll(specifiedPartitionKeys)) {
                 builder.partitionKeys(specifiedPartitionKeys);
                 return;
             }
