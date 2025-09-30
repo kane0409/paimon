@@ -34,6 +34,7 @@ import java.io.Serializable;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
 import java.util.List;
@@ -172,6 +173,15 @@ public interface Expression extends Serializable {
                     ReferencedField referencedField =
                             ReferencedField.checkArgument(typeMapping, caseSensitive, args);
                     return new TrimExpression(
+                            referencedField.field(),
+                            referencedField.fieldType(),
+                            referencedField.literals());
+                }),
+        CONVERT_TZ(
+                (typeMapping, caseSensitive, args) -> {
+                    ReferencedField referencedField =
+                            ReferencedField.checkArgument(typeMapping, caseSensitive, args);
+                    return ConvertTz.create(
                             referencedField.field(),
                             referencedField.fieldType(),
                             referencedField.literals());
@@ -480,6 +490,91 @@ public interface Expression extends Serializable {
                     fieldType,
                     literals[0],
                     literals.length == 1 ? null : Integer.valueOf(literals[1]));
+        }
+    }
+
+    /**
+     * Convert the temporal value to desired formatted string with time zone.
+     * "created_at=convert_tz(created_at,UTC,Asia/Shanghai,yyyy-MM-dd HH:mm:ss)"
+     * "created_at=convert_tz(created_at,UTC,Asia/Shanghai)" (default yyyy-MM-dd HH:mm:ss.SSS)
+     * "created_at=convert_tz(unix_timestamp,UTC,Asia/Shanghai,0,yyyy-MM-dd·HH:mm:ss.SSS)"
+     * (precision·for·timestamp·type,·value·0,3,6,9)
+     */
+    final class ConvertTz extends TemporalExpressionBase<String> {
+
+        private static final long serialVersionUID = 1L;
+
+        private final ZoneId fromZoneId;
+        private final ZoneId toZoneId;
+        private final String formatPattern;
+
+        private ConvertTz(
+                String fieldReference,
+                DataType fieldType,
+                ZoneId fromZoneId,
+                ZoneId toZoneId,
+                @Nullable Integer precision,
+                @Nullable String formatPattern) {
+            super(fieldReference, fieldType, precision);
+            this.fromZoneId = fromZoneId;
+            this.toZoneId = toZoneId;
+            this.formatPattern = formatPattern;
+        }
+
+        @Override
+        public DataType outputType() {
+            return DataTypes.STRING();
+        }
+
+        @Override
+        protected Function<LocalDateTime, String> createConverter() {
+            return localDateTime -> {
+                LocalDateTime convertedDateTime =
+                        localDateTime
+                                .atZone(fromZoneId)
+                                .withZoneSameInstant(toZoneId)
+                                .toLocalDateTime();
+
+                if (formatPattern != null) {
+                    DateTimeFormatter formatter = DateTimeFormatter.ofPattern(formatPattern);
+                    return convertedDateTime.format(formatter);
+                } else {
+                    DateTimeFormatter defaultFormatter =
+                            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS");
+                    return convertedDateTime.format(defaultFormatter);
+                }
+            };
+        }
+
+        private static ConvertTz create(
+                String fieldReference, DataType fieldType, String... literals) {
+            checkArgument(
+                    literals.length >= 2 && literals.length <= 4,
+                    "'convert_tz' supports 2 to 4 arguments, but found '%s'.",
+                    literals.length);
+
+            Integer precision = null;
+            String formatPattern = null;
+
+            if (literals.length == 3) {
+                String thirdArg = literals[2];
+                try {
+                    precision = Integer.valueOf(thirdArg);
+                } catch (NumberFormatException e) {
+                    formatPattern = thirdArg;
+                }
+            } else if (literals.length == 4) {
+                precision = Integer.valueOf(literals[2]);
+                formatPattern = literals[3];
+            }
+
+            return new ConvertTz(
+                    fieldReference,
+                    fieldType,
+                    ZoneId.of(literals[0]),
+                    ZoneId.of(literals[1]),
+                    precision,
+                    formatPattern);
         }
     }
 
