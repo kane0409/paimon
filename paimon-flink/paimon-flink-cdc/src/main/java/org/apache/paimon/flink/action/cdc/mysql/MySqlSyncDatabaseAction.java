@@ -24,6 +24,7 @@ import org.apache.paimon.catalog.Identifier;
 import org.apache.paimon.flink.action.Action;
 import org.apache.paimon.flink.action.cdc.CdcActionCommonUtils;
 import org.apache.paimon.flink.action.cdc.CdcSourceRecord;
+import org.apache.paimon.flink.action.cdc.ComputedColumn;
 import org.apache.paimon.flink.action.cdc.SyncDatabaseActionBase;
 import org.apache.paimon.flink.action.cdc.SyncJobHandler;
 import org.apache.paimon.flink.action.cdc.TableNameConverter;
@@ -43,7 +44,6 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
@@ -53,6 +53,7 @@ import java.util.stream.Collectors;
 import static org.apache.paimon.flink.action.MultiTablesSinkMode.DIVIDED;
 import static org.apache.paimon.flink.action.cdc.CdcActionCommonUtils.schemaCompatible;
 import static org.apache.paimon.flink.action.cdc.CdcActionCommonUtils.tableList;
+import static org.apache.paimon.flink.action.cdc.ComputedColumnUtils.buildComputedColumns;
 import static org.apache.paimon.utils.Preconditions.checkArgument;
 
 /**
@@ -143,12 +144,20 @@ public class MySqlSyncDatabaseAction extends SyncDatabaseActionBase {
                             database,
                             tableNameConverter.convert("", tableInfo.toPaimonTableName()));
             FileStoreTable table;
+
+            List<ComputedColumn> tableComputedColumns = new ArrayList<>();
+            if (!computedColumnArgs.isEmpty()) {
+                tableComputedColumns =
+                        buildComputedColumns(computedColumnArgs, tableInfo.schema().fields());
+                computedColumns.addAll(tableComputedColumns);
+            }
+
             Schema fromMySql =
                     CdcActionCommonUtils.buildPaimonSchema(
                             identifier.getFullName(),
                             partitionKeys,
                             primaryKeys,
-                            Collections.emptyList(),
+                            tableComputedColumns,
                             tableConfig,
                             tableInfo.schema(),
                             metadataConverters,
